@@ -1,0 +1,187 @@
+name: Manage Submissions
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+
+  manage-first-submission:
+    runs-on: self-hosted
+    outputs:
+      run_build: ${{ steps.detector.outputs.official_commit == 'true' && steps.detector.outputs.tag_exists == 'false' }}
+      author_name: ${{ steps.get-author.outputs.author_name }}
+      author_username: ${{ steps.get-author.outputs.author_username }}
+      author_email: ${{ steps.get-author.outputs.author_email }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get Job URL
+        uses: ReeganExE/github-action-job-id@v1.0
+        with:
+          expose-name: false
+
+      - name: Detect Current State
+        id: detector
+        run: |
+          if [ "$(git show-ref origin/submission_1)" == "" ]; then
+            echo ::set-output name=branch_exists::false
+          else
+            echo ::set-output name=branch_exists::true
+          fi
+
+          if [ "$(git tag -l official-test-1)" == "" ]; then
+            echo ::set-output name=tag_exists::false
+          else
+            echo ::set-output name=tag_exists::true
+          fi
+
+          found_official_commit=false
+          for commit in $(git rev-list ${{ github.event.before}}..${{ github.event.after}}); do
+            if [[ `git show -s --format=%B $commit` =~ [Oo][Ff][Ff][Ii][Cc][Ii][Aa][Ll] ]]; then
+              found_official_commit=true
+            fi
+          done
+          echo ::set-output name=official_commit::$found_official_commit
+          echo ::set-output name=build_job_url::$GH_JOB_0_HTML_URL
+
+      - name: Get Author
+        id: get-author
+        run: |
+          echo ::set-output name=author_name::${{ github.event.head_commit.author.name }}
+          echo ::set-output name=author_username::${{ github.event.head_commit.author.username }}
+          echo ::set-output name=author_email::${{ github.event.head_commit.author.email }}
+
+      - name: Create Submission Branch
+        if: ${{ steps.detector.outputs.branch_exists == 'false' }}
+        run: |
+          git branch submission_1 HEAD^1
+          git push --set-upstream origin submission_1
+
+      - name: Create Pull Request
+        if: ${{ steps.detector.outputs.branch_exists == 'false' }}
+        uses: devops-infra/action-pull-request@v0.5.0
+        with:
+          source_branch: "master"
+          target_branch: "submission_1"
+          title: First official assignment submission
+          body: "Add more commits to master to update this pull request. When you push a commit with the word 'official' in the commit message, the automated tests will run."
+          reviewer: robustify
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge Pull Request
+        if: ${{ steps.detector.outputs.official_commit == 'true' && steps.detector.outputs.tag_exists == 'false' }}
+        run: |
+          git checkout submission_1
+          git merge master
+          git tag official-test-1
+          git push
+          git push --tags
+
+      - name: Inform Instructor
+        if: ${{ steps.detector.outputs.official_commit == 'true' && steps.detector.outputs.tag_exists == 'false' }}
+        run: |
+          python3 /home/micho/ou/build-server-python/instructor_info.py \
+            --name "${{ steps.get-author.outputs.author_name }}" \
+            --repo_name ${{ github.event.repository.name }} \
+            --branch submission_1 \
+            --job_url $GH_JOB_0_HTML_URL
+
+  manage-second-submission:
+    runs-on: self-hosted
+    needs: manage-first-submission
+    outputs:
+      run_build: ${{ steps.detector.outputs.official_commit == 'true' && steps.detector.outputs.branch_exists == 'true' && steps.detector.outputs.tag_exists == 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get Job URL
+        uses: ReeganExE/github-action-job-id@v1.0
+        with:
+          expose-name: false
+
+      - name: Detect Current State
+        id: detector
+        run: |
+          if [ "$(git show-ref origin/submission_2)" == "" ]; then
+            echo ::set-output name=branch_exists::false
+          else
+            echo ::set-output name=branch_exists::true
+          fi
+
+          if [ "$(git tag -l official-test-2)" == "" ]; then
+            echo ::set-output name=tag_exists::false
+          else
+            echo ::set-output name=tag_exists::true
+          fi
+
+          found_official_commit=false
+          for commit in $(git rev-list ${{ github.event.before}}..${{ github.event.after}}); do
+            if [[ `git show -s --format=%B $commit` =~ [Oo][Ff][Ff][Ii][Cc][Ii][Aa][Ll] ]]; then
+              found_official_commit=true
+            fi
+          done
+          echo ::set-output name=official_commit::$found_official_commit
+
+      - name: Merge Pull Request
+        if: ${{ steps.detector.outputs.official_commit == 'true' && steps.detector.outputs.branch_exists == 'true' && steps.detector.outputs.tag_exists == 'false' }}
+        run: |
+          git checkout submission_2
+          git merge master
+          git tag official-test-2
+          git push
+          git push --tags
+
+      - name: Inform Instructor
+        if: ${{ steps.detector.outputs.official_commit == 'true' && steps.detector.outputs.branch_exists == 'true' && steps.detector.outputs.tag_exists == 'false' }}
+        run: |
+          python3 /home/micho/ou/build-server-python/instructor_info.py \
+            --name "${{ needs.manage-first-submission.outputs.author_name }}" \
+            --repo_name ${{ github.event.repository.name }} \
+            --branch submission_2 \
+            --job_url $GH_JOB_1_HTML_URL
+
+  build-and-test:
+    runs-on: self-hosted
+    needs: [manage-first-submission, manage-second-submission]
+    if: ${{ needs.manage-first-submission.outputs.run_build == 'true' || needs.manage-second-submission.outputs.run_build == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get Job URL
+        uses: ReeganExE/github-action-job-id@v1.0
+        with:
+          expose-name: false
+
+      - name: Run ROS Build and Test
+        id: rosbuild
+        continue-on-error: true
+        run: |
+          docker build -t ros_test_image .
+          docker run --name test_instance -td ros_test_image /bin/bash
+          docker exec -t test_instance /home/ros/src/ci_build.bash
+
+      - name: Inform Student
+        continue-on-error: true
+        run: |
+          python3 /home/micho/ou/build-server-python/student_test_results.py \
+            --name "${{ needs.manage-first-submission.outputs.author_name }}" \
+            --repo_name ${{ github.event.repository.name }} \
+            --email ${{ needs.manage-first-submission.outputs.author_email }} \
+            --outcome ${{ steps.rosbuild.outcome }} \
+            --job_url $GH_JOB_2_HTML_URL
+
+      - name: Docker Cleanup
+        run: |
+          docker rm test_instance -f
+          docker rmi ros_test_image:latest
+

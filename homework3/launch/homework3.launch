@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!-- Launch your Homework 3 node here -->
+
+  <!-- Set up static TF transforms here -->
+
+  <!-- Configure ROS to use time from bag file -->
+
+  <!-- Dataspeed ROS Driver -->
+  <include file="$(find dbw_mkz_can)/launch/dbw.launch" >
+    <arg name="live" value="false"/>
+  </include>
+
+  <!-- Ouster LIDAR Driver -->
+  <include file="$(find avs_lecture_sensor_config)/launch/ouster_driver.launch" >
+    <arg name="replay" value="true" />
+    <arg name="name" value="ouster" />
+  </include>
+
+  <!-- Visualize in Rviz -->
+  <arg name="rviz" default="true" />
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="perception_viz" args="-d $(find homework3)/rviz/homework3.rviz" respawn="true" />
+
+</launch>

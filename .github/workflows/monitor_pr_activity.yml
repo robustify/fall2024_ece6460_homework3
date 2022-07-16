@@ -1,0 +1,100 @@
+name: Monitor Pull Requst Activity
+
+on:
+  pull_request_review:
+    types: [ submitted ]
+
+jobs:
+
+  initialize-second-submission:
+    runs-on: self-hosted
+    if: ${{ github.event.sender.login == 'robustify' }}
+    outputs:
+      grade_submitted: ${{ steps.score-feedback.outputs.grade_submitted }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Detect Current State
+        id: detector
+        run: |
+          if [ "$(git show-ref origin/submission_2)" == "" ]; then
+            echo ::set-output name=branch_exists::false
+          else
+            echo ::set-output name=branch_exists::true
+          fi
+
+      - name: Detect Score Feedback
+        id: score-feedback
+        run: |
+          if 'baseline score' in """${{ github.event.review.body }}""".lower():
+            print('::set-output name=create_branch::true')
+          else:
+            print('::set-output name=create_branch::false')
+
+          if 'baseline score' in """${{ github.event.review.body }}""".lower() or 'final score' in """${{ github.event.review.body }}""".lower():
+            print('::set-output name=grade_submitted::true')
+          else:
+            print('::set-output name=grade_submitted::false')
+
+        shell: python3 {0}
+
+      - name: Create Submission Branch
+        if: ${{ steps.detector.outputs.branch_exists == 'false' && steps.score-feedback.outputs.create_branch == 'true' }}
+        run: |
+          git checkout master
+          git pull
+          git branch submission_2
+          git push --set-upstream origin submission_2
+
+          git config user.name "github-actions[bot]"
+          git config user.email "<41898282+github-actions[bot]@users.noreply.github.com>"
+          echo " " >> .github/.keep
+          git add .github/.keep
+          git commit -m "Preparing pull request"
+          git push
+
+      - name: Create Pull Request
+        if: ${{ steps.detector.outputs.branch_exists == 'false' && steps.score-feedback.outputs.create_branch == 'true' }}
+        uses: devops-infra/action-pull-request@v0.4
+        with:
+          source_branch: "master"
+          target_branch: "submission_2"
+          title: Second official assignment submission
+          body: "Add more commits to master to update this pull request. When you push a commit with the word 'official' in the commit message, the automated tests will run."
+          reviewer: robustify
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  inform-student:
+    runs-on: self-hosted
+    needs: initialize-second-submission
+    if: ${{ github.event.sender.login == 'robustify' }}
+
+    steps:
+      - name: General Feedback
+        if: ${{ needs.initialize-second-submission.outputs.grade_submitted == 'false' }}
+        run: |
+          head_sha=${{ github.event.pull_request.head.sha }}
+          author_email=$(git show -s $head_sha --format=%ae)
+          author_name=$(git show -s $head_sha --format=%an)
+          python3 /home/micho/ou/build-server-python/feedback_notification.py \
+            --name "$author_name" \
+            --repo_name ${{ github.event.repository.name }} \
+            --email $author_email \
+            --pr_url ${{ github.event.pull_request.html_url }}
+
+      - name: Grade Submitted
+        if: ${{ needs.initialize-second-submission.outputs.grade_submitted == 'true' }}
+        run: |
+          head_sha=${{ github.event.pull_request.head.sha }}
+          author_email=$(git show -s $head_sha --format=%ae)
+          author_name=$(git show -s $head_sha --format=%an)
+          python3 /home/micho/ou/build-server-python/feedback_notification.py \
+            --name "$author_name" \
+            --repo_name ${{ github.event.repository.name }} \
+            --email $author_email \
+            --pr_url ${{ github.event.pull_request.html_url }} \
+            --grade_submitted
